@@ -6,10 +6,24 @@ from openai import OpenAI
 # load variables from .env (e.g. OPENAI_API_KEY) into the process environment
 load_dotenv()
 
-MODEL = "gpt-4o-mini" # cheap and small
+# pick the provider at startup: if a Kimi key is configured, use Kimi's
+# OpenAI-compatible endpoint instead of talking to OpenAI directly
+if os.getenv("KIMI_API_KEY"):
+    MODEL = "kimi-k2.6"
+    # Kimi exposes an OpenAI-compatible API, so the same OpenAI SDK works -
+    # just point it at Kimi's base_url with a Kimi key instead
+    client = OpenAI(
+        api_key=os.getenv("KIMI_API_KEY"),
+        base_url=os.getenv("KIMI_BASE_URL")
+    )
+    EXTRA_BODY = {"thinking": {"type": "disabled"}} # disabled to not consume to much tokens
 
-# reads OPENAI_API_KEY from the environment automatically
-client = OpenAI()
+else:
+    MODEL = "gpt-4o-mini" # cheap and small
+    # # reads OPENAI_API_KEY from the environment automatically
+    client = OpenAI();
+    EXTRA_BODY = {} # no provider-specific extras needed for plain OpenAI
+
 
 def run():
     """Run the loop till the user quiets"""
@@ -42,9 +56,12 @@ def run():
         })
 
         # send the whole conversation so far - the model has no memory of its own
+        # extra_body carries provider-specific options not in the standard OpenAI
+        # API (e.g. Kimi's "disable thinking"); it's just {} for plain OpenAI
         response = client.chat.completions.create(
             model=MODEL,
-            messages=messages
+            messages=messages,
+            extra_body=EXTRA_BODY
         )
 
         # pull just the reply text out of the response object
