@@ -38,8 +38,13 @@ def run():
 
     while True:
 
-        # block here until the user types something and hits enter
-        user_input = input("you > ").strip()
+        try:
+            # block here until the user types something and hits enter
+            user_input = input("you > ").strip()
+        except KeyboardInterrupt:
+            # Ctrl+C while waiting for input - exit quietly instead of a traceback
+            print("\nGoodbye")
+            break
 
         if user_input in {"quit", "exit"}:
             print("Goodbye")
