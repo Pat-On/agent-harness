@@ -2,7 +2,6 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-
 # load variables from .env (e.g. OPENAI_API_KEY) into the process environment
 load_dotenv()
 
@@ -13,16 +12,41 @@ if os.getenv("KIMI_API_KEY"):
     # Kimi exposes an OpenAI-compatible API, so the same OpenAI SDK works -
     # just point it at Kimi's base_url with a Kimi key instead
     client = OpenAI(
-        api_key=os.getenv("KIMI_API_KEY"),
-        base_url=os.getenv("KIMI_BASE_URL")
+        api_key=os.getenv("KIMI_API_KEY"), base_url=os.getenv("KIMI_BASE_URL")
     )
-    EXTRA_BODY = {"thinking": {"type": "disabled"}} # disabled to not consume to much tokens
+    EXTRA_BODY = {
+        "thinking": {"type": "disabled"}
+    }  # disabled to not consume to much tokens
 
 else:
-    MODEL = "gpt-4o-mini" # cheap and small
+    MODEL = "gpt-4o-mini"  # cheap and small
     # # reads OPENAI_API_KEY from the environment automatically
-    client = OpenAI();
-    EXTRA_BODY = {} # no provider-specific extras needed for plain OpenAI
+    client = OpenAI()
+    EXTRA_BODY = {}  # no provider-specific extras needed for plain OpenAI
+
+
+SYSTEM_PROMPT = """
+You are a coding assistant running in a terminal, helping a developer with software engineering tasks.
+
+Be concise. Prefer short, direct answers over long ones. When the user asks for code, return the code with
+minimal explanation unless they ask for more.
+
+When returning code, use fenced code blocks and specify the language.
+
+You do not currently have access to any tools — you cannot read files, run commands,
+or modify anything on the user's system. If the user asks you to do something that would require a tool,
+say so plainly and suggest they describe the relevant content directly.
+"""
+
+# SYSTEM_PROMPT = """
+# You are a coding assistant running in a terminal, helping a developer with software engineering tasks.
+
+# When returning code, use fenced code blocks and specify the language.
+
+# You do not currently have access to any tools — you cannot read files, run commands,
+# or modify anything on the user's system. If the user asks you to do something that would require a tool,
+# say so plainly and suggest they describe the relevant content directly.
+# """
 
 
 def run():
@@ -34,7 +58,8 @@ def run():
 
     print("Agent ready. Type 'quite' or 'exit' to leave. \n")
 
-    messages = []
+    # messages = []
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     while True:
 
@@ -55,18 +80,13 @@ def run():
             continue
 
         # record the user's turn before calling the model
-        messages.append({
-            "role": "user",
-            "content": user_input
-        })
+        messages.append({"role": "user", "content": user_input})
 
         # send the whole conversation so far - the model has no memory of its own
         # extra_body carries provider-specific options not in the standard OpenAI
         # API (e.g. Kimi's "disable thinking"); it's just {} for plain OpenAI
         response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            extra_body=EXTRA_BODY
+            model=MODEL, messages=messages, extra_body=EXTRA_BODY
         )
 
         # pull just the reply text out of the response object
@@ -75,9 +95,10 @@ def run():
 
         # you need to save user message but as well the ML response
         # otherwise the next request would forget the agent's own reply
-        messages.append({"role":"assistant", "content": assistant_message })
+        messages.append({"role": "assistant", "content": assistant_message})
 
         print(f"\nagent > {assistant_message}\n")
+
 
 if __name__ == "__main__":
     run()
