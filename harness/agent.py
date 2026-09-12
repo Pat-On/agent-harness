@@ -72,7 +72,7 @@ def run():
             break
 
         if user_input in {"quit", "exit"}:
-            print("Goodbye")
+            print("\nGoodbye")
             break
 
         # ignore empty input (blank line) instead of sending it to the model
