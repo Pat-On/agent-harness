@@ -1,7 +1,10 @@
 .vscode/
 .env
 
+workspace
+
 # Python
 .venv/
 __pycache__/
 *.pyc
+
