@@ -1,6 +1,9 @@
 import os
+import json
 from dotenv import load_dotenv
 from openai import OpenAI
+
+from harness.tools import registry
 
 # load variables from .env (e.g. OPENAI_API_KEY) into the process environment
 load_dotenv()
@@ -33,20 +36,10 @@ minimal explanation unless they ask for more.
 
 When returning code, use fenced code blocks and specify the language.
 
-You do not currently have access to any tools — you cannot read files, run commands,
-or modify anything on the user's system. If the user asks you to do something that would require a tool,
-say so plainly and suggest they describe the relevant content directly.
+You have access to five filesystem tools — read, write, list, mkdir, delete — operating on a workspace directory. 
+Use them whenever a task involves reading, modifying, or organizing files. Paths are relative to
+the workspace root. Prefer reading and writing real files over describing them in conversation.
 """
-
-# SYSTEM_PROMPT = """
-# You are a coding assistant running in a terminal, helping a developer with software engineering tasks.
-
-# When returning code, use fenced code blocks and specify the language.
-
-# You do not currently have access to any tools — you cannot read files, run commands,
-# or modify anything on the user's system. If the user asks you to do something that would require a tool,
-# say so plainly and suggest they describe the relevant content directly.
-# """
 
 
 def run():
@@ -86,18 +79,55 @@ def run():
         # extra_body carries provider-specific options not in the standard OpenAI
         # API (e.g. Kimi's "disable thinking"); it's just {} for plain OpenAI
         response = client.chat.completions.create(
-            model=MODEL, messages=messages, extra_body=EXTRA_BODY
+            model=MODEL,
+            messages=messages,
+            extra_body=EXTRA_BODY,
+            # tells the model which tools it can call (read/write/list/mkdir/delete);
+            # schemas are generated from the registry, so this list updates on its
+            # own as tools are added or removed - nothing here to keep in sync by hand
+            tools = registry.get_schemas()
         )
 
-        # pull just the reply text out of the response object
-        # (see docs/openai_chat_completion_response.md for the full shape)
-        assistant_message = response.choices[0].message.content
+        message = response.choices[0].message                
+        print(f"\n **** DEBUG **** \n")
+        print(f"\n **** DEBUG **** message   > {message}\n")
+        print(f"\n **** DEBUG **** \n")
+        print(f"\n **** DEBUG **** message   > {message.tool_calls}\n")
+        print(f"\n **** DEBUG **** \n")
+        
+        # If the model asked for a tool call, handle it before producing    
+        # the user-facing reply. Minimum-viable dispatch: one round only.
+        if message.tool_calls:
+            # Step 1: record the model's tool-call message in history so the
+            # upcoming tool-result messages have something to reference.
+            messages.append(message)
 
-        # you need to save user message but as well the ML response
-        # otherwise the next request would forget the agent's own reply
-        messages.append({"role": "assistant", "content": assistant_message})
+            # Step 2: run each requested tool and append its result to history,
+            # using the matching tool_call_id so the model can pair them up.
+            for call in message.tool_calls:
+                arguments = json.loads(call.function.arguments)
+                result = registry.dispatch(call.function.name, arguments)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call.id,
+                    "content": result,
+                })
 
-        print(f"\nagent > {assistant_message}\n")
+            # Step 3: re-call the model now that the tool results are in
+            # context. This second call produces the model's final text reply.
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                tools=registry.get_schemas(),
+            )
+            message = response.choices[0].message
+
+        # By here, `message` is the model's final text response for this turn —
+        # either from the first call (no tools needed) or the second (after dispatch).
+        assistant_text = message.content 
+        messages.append({"role": "assistant", "content": assistant_text})
+
+        print(f"\nagent > {assistant_text}\n")
 
 
 if __name__ == "__main__":
