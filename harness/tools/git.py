@@ -9,10 +9,11 @@ import subprocess
 from harness.tools.filesystem import WORKSPACE
 from harness.tools.registry import tool
 
+from harness.config import GIT_TIMEOUT
 
 # Timeout for every git invocation, in seconds. Git operations should be
 # fast on a local repo; if one hangs, kill it rather than freeze the agent.
-GIT_TIMEOUT = 10
+# GIT_TIMEOUT = 10
 
 
 def _run_git(*args: str) -> str:
