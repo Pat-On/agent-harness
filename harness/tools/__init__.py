@@ -9,3 +9,5 @@ from harness.tools import filesystem  # noqa: F401 — imported for side effects
 # @tool-decorated git_status/git_diff/git_log/git_commit/git_checkout/git_branch
 # definitions, registering them. Nothing here ever calls `git` by name.
 from harness.tools import git  # noqa: F401 — imported for side effects
+
+from harness.tools import bash # noqa: F401
