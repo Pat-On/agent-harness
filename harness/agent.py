@@ -10,6 +10,9 @@ from harness.tools import registry
 from harness.memory import load_agents_md
 from harness.config import MODEL, STEP_BUDGET
 
+from harness.sandbox import Sandbox
+from harness.tools.bash import set_sandbox
+
 # load variables from .env (e.g. OPENAI_API_KEY) into the process environment
 load_dotenv()
 
@@ -58,106 +61,123 @@ SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system.txt").read_text()
 def run():
     """Run the loop till the user quiets"""
 
+    # Step 1: start the sandbox and wire it into the bash tool.            
+    # This creates the Docker container, bind-mounts the workspace, and
+    # cleans up any orphan containers from prior crashed sessions.
+    sandbox = Sandbox()
+    sandbox.start()
+    set_sandbox(sandbox)
+
+
     # conversation history - entire memory of the agent
     # every turn we append to it and send the whole thing to the model
     # (there's no server-side session state - the full transcript IS the state)
 
     print("Agent ready. Type 'quite' or 'exit' to leave. \n")
 
-    # Load AGENTS.md and assemble the initial message list.
-    # The first system message is the harness's prompt; the second is the
-    # project's accumulated memory.
-    agents_md = load_agents_md()
 
-    # messages = []
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": agents_md},
-    ]
+    try: 
+        # Load AGENTS.md and assemble the initial message list.
+        # The first system message is the harness's prompt; the second is the
+        # project's accumulated memory.
+        agents_md = load_agents_md()
 
-    while True:
+        # messages = []
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": agents_md},
+        ]
 
-        try:
-            # block here until the user types something and hits enter
-            user_input = input("you > ").strip()
-        except KeyboardInterrupt:
-            # Ctrl+C while waiting for input - exit quietly instead of a traceback
-            print("\nGoodbye")
-            break
-
-        if user_input in {"quit", "exit"}:
-            print("\nGoodbye")
-            break
-
-        # ignore empty input (blank line) instead of sending it to the model
-        if not user_input:
-            continue
-
-        # 3. Append the user's message to the history
-        messages.append({"role": "user", "content": user_input})
-
-        ###### ReAct dispatch loop ######
-        # Full ReAct dispatch loop — replaces the single-round dispatch
-        step_count = 0
         while True:
-            response = client.chat.completions.create(
-                model=MODEL,
-                messages=messages,
-                tools=registry.get_schemas(),
-            )
-            message = response.choices[0].message
 
-            if not message.tool_calls:
+            try:
+                # block here until the user types something and hits enter
+                user_input = input("you > ").strip()
+            except KeyboardInterrupt:
+                # Ctrl+C while waiting for input - exit quietly instead of a traceback
+                print("\nGoodbye")
                 break
 
-            if step_count >= STEP_BUDGET:
-                messages.append({"role": "system", "content": BUDGET_HIT_MESSAGE})
-                # tool_choice="none" forces a text reply — the model literally
-                # cannot request another tool call on this response, which is
-                # what makes BUDGET_HIT_MESSAGE's instructions binding rather
-                # than just a request it could ignore.
+            if user_input in {"quit", "exit"}:
+                print("\nGoodbye")
+                break
+
+            # ignore empty input (blank line) instead of sending it to the model
+            if not user_input:
+                continue
+
+            # 3. Append the user's message to the history
+            messages.append({"role": "user", "content": user_input})
+
+            ###### ReAct dispatch loop ######
+            # Full ReAct dispatch loop — replaces the single-round dispatch
+            step_count = 0
+            while True:
                 response = client.chat.completions.create(
                     model=MODEL,
                     messages=messages,
                     tools=registry.get_schemas(),
-                    tool_choice="none",
                 )
                 message = response.choices[0].message
-                break
 
-            messages.append(message)
+                if not message.tool_calls:
+                    break
 
-            for call in message.tool_calls:
-                arguments = json.loads(call.function.arguments)
-                result = registry.dispatch(call.function.name, arguments)
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result,
-                    }
+                if step_count >= STEP_BUDGET:
+                    messages.append({"role": "system", "content": BUDGET_HIT_MESSAGE})
+                    # tool_choice="none" forces a text reply — the model literally
+                    # cannot request another tool call on this response, which is
+                    # what makes BUDGET_HIT_MESSAGE's instructions binding rather
+                    # than just a request it could ignore.
+                    response = client.chat.completions.create(
+                        model=MODEL,
+                        messages=messages,
+                        tools=registry.get_schemas(),
+                        tool_choice="none",
+                    )
+                    message = response.choices[0].message
+                    break
+
+                messages.append(message)
+
+                for call in message.tool_calls:
+                    arguments = json.loads(call.function.arguments)
+                    result = registry.dispatch(call.function.name, arguments)
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": result,
+                        }
+                    )
+
+                step_count += 1
+
+            # After the loop: `message.content` should have real text. If it
+            # doesn't, something unexpected happened (rare API edge case or a
+            # bug in the loop termination logic). Raise loudly rather than
+            # silently substituting a placeholder — silent fallbacks hide real
+            # problems and were exactly the 3.3 None-content workaround we're
+            # now removing.
+            if not message.content:
+                raise RuntimeError(
+                    "Loop terminated but message.content is empty. "
+                    "This shouldn't happen — check the API response and the "
+                    "termination logic."
                 )
+            
+            assistant_text = message.content
 
-            step_count += 1
-
-        # After the loop: `message.content` should have real text. If it
-        # doesn't, something unexpected happened (rare API edge case or a
-        # bug in the loop termination logic). Raise loudly rather than
-        # silently substituting a placeholder — silent fallbacks hide real
-        # problems and were exactly the 3.3 None-content workaround we're
-        # now removing.
-        if not message.content:
-            raise RuntimeError(
-                "Loop terminated but message.content is empty. "
-                "This shouldn't happen — check the API response and the "
-                "termination logic."
-            )
-        
-        assistant_text = message.content
-
-        messages.append({"role": "assistant", "content": assistant_text})
-        print(f"\nagent > {assistant_text}\n")
-
+            messages.append({"role": "assistant", "content": assistant_text})
+            print(f"\nagent > {assistant_text}\n")
+    finally:
+        # Step 2: tear down the sandbox no matter how run() exits.
+        # This runs on normal exit, on exception, on user Ctrl-C — but
+        # NOT on hard crashes (SIGKILL, power loss). The orphan cleanup
+        # in Sandbox.start() handles those on the next session start.
+        print("Stopping sandbox...")
+        sandbox.stop()
+        print("Sandbox stopped.")
 
 if __name__ == "__main__":
     run()
