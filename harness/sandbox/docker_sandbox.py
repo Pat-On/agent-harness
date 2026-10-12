@@ -5,9 +5,10 @@ The bash tool asks the sandbox to run things; the sandbox knows Docker; the
 bash tool stays Docker-unaware.
 """
 
+import os
 import uuid
 import docker
-from docker.errors import DockerException, NotFound
+from docker.errors import DockerException, ImageNotFound, NotFound
 
 from harness.tools.filesystem import WORKSPACE
 from harness.config import (
@@ -17,6 +18,46 @@ from harness.config import (
     SANDBOX_CONTAINER_PREFIX,
     BASH_TIMEOUT,
 )
+
+
+class SandboxUnavailable(RuntimeError):
+    """Raised when Docker can't give us a container to work in.
+
+    docker-py reports an unreachable daemon as a DockerException wrapped
+    around a stack of requests/urllib3/http.client frames, none of which
+    mention the actual problem: nothing is listening on the socket we
+    asked for. The harness is dead in the water without a daemon, so we
+    translate that into a single readable message that names the endpoint
+    and what to do about it.
+    """
+
+
+def _unreachable_daemon_help(exc: Exception) -> str:
+    """Build the message for a daemon we couldn't connect to."""
+    # from_env() honors DOCKER_HOST and otherwise falls back to the
+    # conventional Unix socket. Report whichever one we actually tried,
+    # because "connection refused" means different things for each.
+    configured = os.environ.get("DOCKER_HOST")
+    endpoint = configured or "unix:///var/run/docker.sock"
+    origin = "from DOCKER_HOST" if configured else "the default endpoint"
+
+    return (
+        f"Cannot reach the Docker daemon at {endpoint} ({origin}).\n"
+        "The harness runs every bash command inside a container, so it "
+        "can't start without one.\n"
+        "\n"
+        "Things to check on this machine:\n"
+        "  docker info                   does the daemon answer at all?\n"
+        "  sudo systemctl start docker   Linux: start it if it isn't running\n"
+        "  docker context ls             rootless/Docker Desktop put the\n"
+        "                                socket elsewhere; from_env() ignores\n"
+        "                                contexts, so export DOCKER_HOST to\n"
+        "                                the endpoint shown there\n"
+        "  id -nG | grep docker          a permission error looks different\n"
+        "                                from this one, but check anyway\n"
+        "\n"
+        f"Underlying docker error: {exc}"
+    )
 
 
 class Sandbox:
@@ -40,9 +81,13 @@ class Sandbox:
     """
 
     def __init__(self) -> None:
-        # Step 1: connect to the Docker daemon. This raises DockerException
-        # if the daemon isn't reachable (Docker Desktop not running, etc.).
-        self._client = docker.from_env()
+        # Step 1: connect to the Docker daemon. from_env() asks the daemon
+        # for its API version straight away, so an unreachable daemon fails
+        # here rather than later on the first container call.
+        try:
+            self._client = docker.from_env()
+        except DockerException as exc:
+            raise SandboxUnavailable(_unreachable_daemon_help(exc)) from exc
 
         # Step 2: give this container a unique name using our prefix.
         # The prefix lets us identify and clean up orphans; the UUID
@@ -63,7 +108,32 @@ class Sandbox:
         # detach=True runs it in the background; without this the call would
         # block. tty=True keeps the container alive after startup (otherwise
         # a container with no active process exits immediately).
-        self._container = self._client.containers.run(
+        # A missing image is the other startup failure worth naming: the
+        # image is built locally from the harness's Dockerfile, so there's
+        # no registry to pull it from and docker-py's 404 says only
+        # "pull access denied".
+        try:
+            self._container = self._run_container()
+        except ImageNotFound as exc:
+            raise SandboxUnavailable(
+                f"The sandbox image {SANDBOX_IMAGE!r} doesn't exist locally "
+                "and can't be pulled (it's built from this repo).\n"
+                "Build it first:\n"
+                "  docker build -f harness/sandbox/Dockerfile "
+                f"-t {SANDBOX_IMAGE} .\n"
+                "\n"
+                f"Underlying docker error: {exc}"
+            ) from exc
+
+        # Step 3: wait for the container to reach the "running" state. Docker
+        # is usually fast (sub-second), but on first pull of an image or on
+        # a slow daemon it can take longer.
+        self._wait_for_running()
+
+    def _run_container(self):
+        """Create and start the container. Separated so start() can
+        translate Docker's errors without wrapping the whole sequence."""
+        return self._client.containers.run(
             image=SANDBOX_IMAGE,
             name=self._container_name,
             command="sleep infinity",  # keeps the container running
@@ -77,11 +147,6 @@ class Sandbox:
                 },
             },
         )
-
-        # Step 3: wait for the container to reach the "running" state. Docker
-        # is usually fast (sub-second), but on first pull of an image or on
-        # a slow daemon it can take longer.
-        self._wait_for_running()
 
     def execute(self, command: str) -> tuple[int, str, str]:
         """Execute a shell command inside the running container.

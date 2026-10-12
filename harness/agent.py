@@ -10,7 +10,7 @@ from harness.tools import registry
 from harness.memory import load_agents_md
 from harness.config import MODEL, STEP_BUDGET
 
-from harness.sandbox import Sandbox
+from harness.sandbox import Sandbox, SandboxUnavailable
 from harness.tools.bash import set_sandbox
 
 # load variables from .env (e.g. OPENAI_API_KEY) into the process environment
@@ -64,8 +64,17 @@ def run():
     # Step 1: start the sandbox and wire it into the bash tool.            
     # This creates the Docker container, bind-mounts the workspace, and
     # cleans up any orphan containers from prior crashed sessions.
-    sandbox = Sandbox()
-    sandbox.start()
+    try:
+        sandbox = Sandbox()
+        sandbox.start()
+    except SandboxUnavailable as exc:
+        # Nothing below this line works without a container, and the cause
+        # is always something to fix outside the harness (daemon down,
+        # image not built). Print the explanation and leave with a failing
+        # status — a traceback through urllib3's internals would only bury
+        # it.
+        print(f"\n{exc}\n")
+        raise SystemExit(1)
     set_sandbox(sandbox)
 
 
