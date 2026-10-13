@@ -1,45 +1,40 @@
 import os
 import json
-
 from pathlib import Path
-
 from dotenv import load_dotenv
 from openai import OpenAI
 
 from harness.tools import registry
-from harness.memory import load_agents_md
 from harness.config import MODEL, STEP_BUDGET
-
-from harness.sandbox import Sandbox, SandboxUnavailable
+from harness.sandbox import Sandbox
 from harness.tools.bash import set_sandbox
 
-# load variables from .env (e.g. OPENAI_API_KEY) into the process environment
+from harness.memory import ( 
+    load_agents_md,
+    save_agents_md,
+    validate_agents_md_structure,
+)
+
 load_dotenv()
 
-# pick the provider at startup: if a Kimi key is configured, use Kimi's
-# OpenAI-compatible endpoint instead of talking to OpenAI directly
+# Decide which backend to use based on which key is set in .env.
+# This is a configuration-time choice — change .env, not code.
 if os.getenv("KIMI_API_KEY"):
-    # MODEL = "kimi-k2.6"
-    # Kimi exposes an OpenAI-compatible API, so the same OpenAI SDK works -
-    # just point it at Kimi's base_url with a Kimi key instead
+    
     client = OpenAI(
-        api_key=os.getenv("KIMI_API_KEY"), base_url=os.getenv("KIMI_BASE_URL")
+        api_key=os.getenv("KIMI_API_KEY"),
+        base_url=os.getenv("KIMI_BASE_URL"),
     )
-    EXTRA_BODY = {
-        "thinking": {"type": "disabled"}
-    }  # disabled to not consume to much tokens
-
+    # K2.6 supports thinking and non-thinking modes. We disable thinking
+    # to keep response shape identical to OpenAI — no reasoning_content
+    # to handle, no preservation requirements in multi-turn dispatch.
+    EXTRA_BODY = {"thinking": {"type": "disabled"}}
 else:
-    # MODEL = "gpt-4o-mini"  # cheap and small
-    # # reads OPENAI_API_KEY from the environment automatically
-    client = OpenAI()
-    EXTRA_BODY = {}  # no provider-specific extras needed for plain OpenAI
+    
+    client = OpenAI()  # Reads OPENAI_API_KEY from environment, default base URL.
+    EXTRA_BODY = {}
 
 
-# Maximum number of tool-call rounds per user turn. When hit, the harness
-# forces the model to summarize what it did and hand control back to the
-# user, instead of letting the loop run indefinitely.
-# STEP_BUDGET = 25
 
 # The synthetic system message injected when the step budget is exceeded.
 # It tells the model why it's being asked to stop and what shape its
@@ -58,68 +53,116 @@ reply to it and you can continue from there.
 
 SYSTEM_PROMPT = (Path(__file__).parent / "prompts" / "system.txt").read_text()
 
+# Consolidation prompt loaded from file, like the system prompt.   
+SESSION_END_MEMORY_PROMPT = (
+    Path(__file__).parent / "prompts" / "session_end_memory.txt"
+).read_text()
+
+
+def _consolidate_memory(messages: list, client) -> None:
+    """Run the end-of-session memory consolidation step.
+
+    Sends the current AGENTS.md + full session history + a consolidation
+    prompt to the model. Expects a full AGENTS.md rewrite back. Validates
+    the structure before writing. On failure, logs and keeps the old file.
+    """
+    print("Consolidating memory...")
+
+    try:
+        # Step 1: gather the inputs — current AGENTS.md and the full history.
+        current_agents_md = load_agents_md()
+
+        # Step 2: build the consolidation payload. We reuse the session's
+        # message history but append a fresh system message with the
+        # consolidation prompt + the current AGENTS.md. The model sees
+        # everything it needs to produce the rewrite.
+        consolidation_context = (
+            f"{SESSION_END_MEMORY_PROMPT}\n\n"
+            f"=== Current AGENTS.md ===\n{current_agents_md}\n"
+        )
+        consolidation_messages = messages + [
+            {"role": "system", "content": consolidation_context},
+        ]
+
+        # Step 3: one model call, no tools. tool_choice="none" forces text
+        # output — we want the file content, not tool invocations.
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=consolidation_messages,
+        )
+        proposed = response.choices[0].message.content
+
+        if not proposed:
+            print("Memory consolidation returned empty content. Keeping current AGENTS.md.")
+            return
+
+        # Step 4: validate structure. Reject a malformed return without
+        # touching the file.
+        if not validate_agents_md_structure(proposed):
+            print(
+                "Memory consolidation returned malformed structure "
+                "(missing section headers). Keeping current AGENTS.md."
+            )
+            return
+
+        # Step 5: atomic write. The old file is replaced by the new one
+        # in a single filesystem operation.
+        save_agents_md(proposed)
+        print("Memory updated.")
+
+    except Exception as e:
+        # If anything goes wrong during consolidation — API error, timeout,
+        # unexpected exception — we log and return. The old AGENTS.md stays
+        # intact. Consolidation is a nice-to-have; sandbox teardown is
+        # non-negotiable.
+        print(f"Memory consolidation failed: {e}. Keeping current AGENTS.md.")
+
+
+
 def run():
-    """Run the loop till the user quiets"""
+    """Run the agent's conversation loop until the user quits."""
 
     # Step 1: start the sandbox and wire it into the bash tool.            
     # This creates the Docker container, bind-mounts the workspace, and
     # cleans up any orphan containers from prior crashed sessions.
-    try:
-        sandbox = Sandbox()
-        sandbox.start()
-    except SandboxUnavailable as exc:
-        # Nothing below this line works without a container, and the cause
-        # is always something to fix outside the harness (daemon down,
-        # image not built). Print the explanation and leave with a failing
-        # status — a traceback through urllib3's internals would only bury
-        # it.
-        print(f"\n{exc}\n")
-        raise SystemExit(1)
+    sandbox = Sandbox()
+    sandbox.start()
     set_sandbox(sandbox)
 
-
-    # conversation history - entire memory of the agent
-    # every turn we append to it and send the whole thing to the model
-    # (there's no server-side session state - the full transcript IS the state)
-
-    print("Agent ready. Type 'quite' or 'exit' to leave. \n")
-
-
-    try: 
-        # Load AGENTS.md and assemble the initial message list.
+    try:
+        # Load AGENTS.md and assemble the initial message list.       
         # The first system message is the harness's prompt; the second is the
         # project's accumulated memory.
         agents_md = load_agents_md()
 
-        # messages = []
+        # The conversation history. This is the entire memory of the agent.
+        # Every turn, we append to it and send the whole thing to the model.
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "system", "content": agents_md},
+            {"role": "system", "content": agents_md}
         ]
+
+        print("Agent ready. Type 'quit' or 'exit' to leave.\n")
 
         while True:
 
-            try:
-                # block here until the user types something and hits enter
-                user_input = input("you > ").strip()
-            except KeyboardInterrupt:
-                # Ctrl+C while waiting for input - exit quietly instead of a traceback
-                print("\nGoodbye")
-                break
+            # 1. Get input from the user
+            user_input = input("you > ").strip()
 
+            # 2. Allow the user to leave cleanly
             if user_input in {"quit", "exit"}:
-                print("\nGoodbye")
+                _consolidate_memory(messages, client)
+                print("Goodbye.")
                 break
 
-            # ignore empty input (blank line) instead of sending it to the model
+            # Skip empty lines without making a model call
             if not user_input:
                 continue
 
             # 3. Append the user's message to the history
             messages.append({"role": "user", "content": user_input})
 
-            ###### ReAct dispatch loop ######
-            # Full ReAct dispatch loop — replaces the single-round dispatch
+            # Full ReAct dispatch loop — replaces the single-round dispatch   
             step_count = 0
             while True:
                 response = client.chat.completions.create(
@@ -134,10 +177,6 @@ def run():
 
                 if step_count >= STEP_BUDGET:
                     messages.append({"role": "system", "content": BUDGET_HIT_MESSAGE})
-                    # tool_choice="none" forces a text reply — the model literally
-                    # cannot request another tool call on this response, which is
-                    # what makes BUDGET_HIT_MESSAGE's instructions binding rather
-                    # than just a request it could ignore.
                     response = client.chat.completions.create(
                         model=MODEL,
                         messages=messages,
@@ -152,13 +191,11 @@ def run():
                 for call in message.tool_calls:
                     arguments = json.loads(call.function.arguments)
                     result = registry.dispatch(call.function.name, arguments)
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": call.id,
-                            "content": result,
-                        }
-                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": result,
+                    })
 
                 step_count += 1
 
@@ -176,8 +213,8 @@ def run():
                 )
             
             assistant_text = message.content
-
             messages.append({"role": "assistant", "content": assistant_text})
+
             print(f"\nagent > {assistant_text}\n")
     finally:
         # Step 2: tear down the sandbox no matter how run() exits.
@@ -187,6 +224,7 @@ def run():
         print("Stopping sandbox...")
         sandbox.stop()
         print("Sandbox stopped.")
+
 
 if __name__ == "__main__":
     run()
