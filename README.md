@@ -9,3 +9,13 @@
 ```
 source .venv/bin/activate
 ```
+
+
+```bash
+deactivate
+python3 -m venv .venv-host
+source .venv-host/bin/activate
+pip install -r requirements.txt
+echo ".venv-host/" >> .gitignore
+python -m harness.agent
+```
