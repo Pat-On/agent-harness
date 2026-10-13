@@ -8,3 +8,4 @@ workspace
 __pycache__/
 *.pyc
 
+.venv-host/
