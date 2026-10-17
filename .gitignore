@@ -20,3 +20,6 @@ env/
 # Others
 workspace/
 .rag_index
+
+# Harness context logs (compaction offload)
+.harness/
