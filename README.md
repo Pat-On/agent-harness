@@ -23,6 +23,15 @@ the one that runs the harness:
 source .venv-host/bin/activate
 ```
 
+Every command below assumes it is active — the prompt carries the `(.venv-host)` prefix:
+
+```
+(.venv-host) pat@pat-GE62-2QF:~/Projects/agent-harness$
+```
+
+Without it, `pip` is Debian's system pip and refuses with `externally-managed-environment`,
+and `python` is brew's 3.15.
+
 ## Keys
 
 `.env` at the project root (names documented in `.env.example`):
