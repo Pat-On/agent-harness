@@ -1,40 +1,35 @@
 # agent-harness
 
+An agent harness built from scratch: a ReAct loop over an OpenAI-compatible model, with
+filesystem and git tools, containerised `bash`, durable memory in `AGENTS.md`, web search,
+and RAG over a local knowledge corpus.
+
+## Requirements
+
+- **Python 3.11–3.14.** `chromadb` depends on `onnxruntime`, which publishes no wheels for
+  3.15 yet, so `pip install` fails with `ResolutionImpossible` on newer interpreters.
+- **Docker**, running — the `bash` tool executes inside a container.
+- An OpenAI API key, and a Tavily key for web search.
+
 ## Setup
 
-**Use Python 3.12 explicitly.** Bare `python3` is brew's 3.15 on this machine, and
-`onnxruntime` (a hard dependency of `chromadb`) publishes no cp315 wheel — `pip install`
-then fails with `ResolutionImpossible` after backtracking through every chromadb release.
+If your default `python3` is outside the supported range, create the venv with an explicit
+interpreter (`python3.12 -m venv ...`) rather than the bare command.
 
 ```bash
-deactivate
-rm -rf .venv-host
-/usr/bin/python3.12 -m venv .venv-host
+python3 -m venv .venv-host
 source .venv-host/bin/activate
-python -V                      # must print 3.12.x
+python -V                      # confirm the version is in range
 pip install -r requirements.txt
-echo ".venv-host/" >> .gitignore
 ```
 
-`.venv` is the sandbox-side venv (used from inside the container tooling), `.venv-host` is
-the one that runs the harness:
-
-```bash
-source .venv-host/bin/activate
-```
-
-Every command below assumes it is active — the prompt carries the `(.venv-host)` prefix:
-
-```
-(.venv-host) pat@pat-GE62-2QF:~/Projects/agent-harness$
-```
-
-Without it, `pip` is Debian's system pip and refuses with `externally-managed-environment`,
-and `python` is brew's 3.15.
+Activate the venv in every new shell before running anything — `which python` should point
+inside it. Without it, `pip` installs against the system interpreter and may refuse
+outright (`externally-managed-environment` on Debian-based distros).
 
 ## Keys
 
-`.env` at the project root (names documented in `.env.example`):
+`.env` at the project root — see `.env.example` for the variable names:
 
 ```
 OPENAI_API_KEY=sk-...
@@ -42,8 +37,6 @@ TAVILY_API_KEY=tvly-...
 ```
 
 ## Sandbox image
-
-Docker must be running before the harness starts.
 
 ```bash
 docker build -f harness/sandbox/Dockerfile -t agent-harness:01 .
@@ -53,22 +46,26 @@ The tag must match `SANDBOX_IMAGE` in `harness/config.py`.
 
 ## Knowledge index (RAG)
 
-`knowledge/` holds the corpus (`.md` and `.txt` only, recursive). Re-run the indexer after
-every corpus change — indexing is manual, and nothing detects a stale index:
+`knowledge/` holds the corpus — `.md` and `.txt` files, read recursively. Indexing is
+manual and nothing detects a stale index, so re-run it after every corpus change:
 
 ```bash
 python -m harness.rag_index
-echo ".rag_index/" >> .gitignore
 ```
 
-Expect: `Found 9 files` → `Chunked into 9 chunks` → `Embedding via text-embedding-3-small`
-→ `Index built`. The index lives in `.rag_index/` (ChromaDB, derived, regenerable).
-
-Query it from a session with the `recall` tool, e.g. *"what's our on-call escalation policy
-for P0 incidents?"*.
+It reports the files found, the chunk count, the embedding model, and where the index was
+written. The index lives in `.rag_index/` (ChromaDB; derived, gitignored, regenerable in
+seconds). Sessions query it through the `recall` tool.
 
 ## Run
 
 ```bash
 python -m harness.agent
 ```
+
+## Configuration
+
+Operator-tunable values live in `harness/config.py`: model id, step budget, tool timeouts,
+the `bash` allow/deny lists, sandbox image and paths, web-search result count, and the
+`RAG_*` knobs (corpus path, index path, embedding model, chunk size and overlap, default
+result count).
