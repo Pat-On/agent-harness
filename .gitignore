@@ -1,11 +1,22 @@
-.vscode/
+# Secrets — never commit
 .env
 
-workspace
-
-# Python
-.venv/
+# Python build artifacts
 __pycache__/
 *.pyc
+*.pyo
 
-.venv-host/
+# Virtual environments
+.venv/
+venv/
+env/
+.venv-host
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+
+# Others
+workspace/
+.rag_index
