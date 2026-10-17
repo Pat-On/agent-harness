@@ -5,6 +5,8 @@ from typing import Any, Callable
 from pydantic import TypeAdapter
 import inspect
 
+from harness.context.offloader import maybe_offload
+
 
 @dataclass
 class Tool:
@@ -37,6 +39,7 @@ def _format_tool_call(name: str, arguments: dict) -> str:
 
     args_str = ", ".join(formatted_args)
     return f"[{name}({args_str})]"
+
 
 class ToolRegistry:
     """Holds tools, exposes their schemas, dispatches incoming calls."""
@@ -73,12 +76,13 @@ class ToolRegistry:
         # Log the tool call before execution so you see the invocation even if 
         # the tool subsequently crashes or hangs.
         print(_format_tool_call(name, arguments))
-        
+
         # Run the tool, catching any exception so a buggy call doesn't crash the loop.
         # The model sees the error string and decides what to do next.
         try:
             result = self._tools[name].function(**arguments)
-            return str(result)
+            result_str = str(result)
+            return maybe_offload(name, result_str) 
         except Exception as e:
             return f"error: {type(e).__name__}: {e}"
 
