@@ -66,7 +66,7 @@ def _consolidate_memory(messages: list, client) -> None:
     prompt to the model. Expects a full AGENTS.md rewrite back. Validates
     the structure before writing. On failure, logs and keeps the old file.
     """
-    # (from 6.2, unchanged)
+    # Unchanged from the AGENTS.md durable-memory implementation.
     print("Consolidating memory...")
 
     try:
@@ -120,7 +120,7 @@ def _consolidate_memory(messages: list, client) -> None:
 
 
 def _run_compaction(compactor: Compactor, messages: list[dict]) -> None:
-    # (from 7.2, unchanged)
+    # Unchanged from the context-compaction implementation.
     before = compactor.get_last_token_count()
     new_messages = compactor.compact(messages)
 
@@ -145,7 +145,7 @@ def _run_compaction(compactor: Compactor, messages: list[dict]) -> None:
 # The synthetic system message injected when the step budget is exceeded.
 # It tells the model why it's being asked to stop and what shape its
 # response should take.
-# (from 4.x, unchanged)
+# Unchanged from the ReAct loop's step-budget implementation.
 BUDGET_HIT_MESSAGE = """\
 You've reached the step budget for this turn (25 tool calls). Do not make
 any more tool calls. Instead, respond directly to the user with:
@@ -179,7 +179,8 @@ def _build_initial_messages() -> list[dict]:
         {"role": "system", "content": agents_md},
     ]
 
-    # Session-start plan injection (from 8.2).
+    # Session-start plan injection, from the plan.md planning-support
+    # implementation.
     plan_content = load_plan_for_injection()
     if plan_content is not None:
         messages.append({
@@ -265,7 +266,8 @@ def _run_ralph(client, messages, compactor, goal, continuation_prompt):
         # Run one full ReAct loop cycle.
         message = _run_react_loop(client, messages, compactor)
 
-        # Guard against empty content (from 3.3, unchanged discipline).
+        # Guard against empty content — the no-silent-fallback discipline
+        # from the tool-dispatch implementation.
         if not message.content:
             raise RuntimeError(
                 "Loop terminated but message.content is empty. "
@@ -304,20 +306,20 @@ def run():
     """Run the agent's conversation loop until the user quits."""
 
     # Step 1: start the sandbox and wire it into the bash tool.
-    # (from 5.x, unchanged)
+    # Unchanged from the Docker sandbox implementation.
     sandbox = Sandbox()
     sandbox.start()
     set_sandbox(sandbox)
 
     # Create the Compactor once per session.
-    # (from 7.2, unchanged)
+    # Unchanged from the context-compaction implementation.
     compactor = Compactor(client)
 
     try:
         messages = _build_initial_messages()
 
         # Track turns since the last planning reminder was fired.
-        # (from 8.2, unchanged)
+        # Unchanged from the plan.md planning-support implementation.
         turns_since_reminder = 0
 				
 		# <---- NEW SESSION STATE
@@ -337,12 +339,12 @@ def run():
 
         while True:
             # Compaction check runs BEFORE reading user input.
-            # (from 7.2, unchanged)
+            # Unchanged from the context-compaction implementation.
             if compactor.should_compact():
                 _run_compaction(compactor, messages)
 
             # Display current context size before the prompt.
-            # (from 7.2, unchanged)
+            # Unchanged from the context-compaction implementation.
             current_tokens = compactor.get_last_token_count()
             if current_tokens > 0:
                 print(f"[Context: {current_tokens:,} / {COMPACTION_THRESHOLD:,} tokens]")
@@ -362,7 +364,7 @@ def run():
 
             if user_input == "/compact":
                 # Manual compaction — same code path as automatic.
-                # (from 7.2, unchanged)
+                # Unchanged from the context-compaction implementation.
                 _run_compaction(compactor, messages)
                 continue
 						
@@ -417,7 +419,7 @@ def run():
 
             # Fire the planning reminder if the interval has elapsed AND
             # plan.md has open items.
-            # (from 8.2, unchanged)
+            # Unchanged from the plan.md planning-support implementation.
             turns_since_reminder += 1
             if turns_since_reminder >= PLAN_REMINDER_INTERVAL and has_open_items():
                 messages.append({"role": "system", "content": build_reminder_message()})
@@ -426,12 +428,14 @@ def run():
 						
 			# <---- MODIFIED (was ~30 lines of inline ReAct code; now delegates to _run_react_loop)
             # Run one ReAct loop cycle for this turn.                     
-            # Behavior is unchanged from 8.2 — same tool dispatch, same
-            # step budget handling, same token accounting. The loop just
-            # lives in a helper now so /ralph can invoke it repeatedly.
+            # Behavior is unchanged from the plan.md planning-support
+            # implementation — same tool dispatch, same step budget
+            # handling, same token accounting. The loop just lives in a
+            # helper now so /ralph can invoke it repeatedly.
             message = _run_react_loop(client, messages, compactor)
 
-            # Guard against empty content (from 3.3, unchanged discipline).
+            # Guard against empty content — the no-silent-fallback discipline
+            # from the tool-dispatch implementation.
             if not message.content:
                 raise RuntimeError(
                     "Loop terminated but message.content is empty. "
@@ -445,7 +449,7 @@ def run():
 
     finally:
         # Tear down the sandbox no matter how run() exits.
-        # (from 5.x, unchanged)
+        # Unchanged from the Docker sandbox implementation.
         print("Stopping sandbox...")
         sandbox.stop()
         print("Sandbox stopped.")
