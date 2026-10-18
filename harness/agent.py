@@ -25,22 +25,8 @@ from harness.planning import (
 
 load_dotenv()
 
-# Decide which backend to use based on which key is set in .env.
-# This is a configuration-time choice — change .env, not code.
-if os.getenv("KIMI_API_KEY"):
-    
-    client = OpenAI(
-        api_key=os.getenv("KIMI_API_KEY"),
-        base_url=os.getenv("KIMI_BASE_URL"),
-    )
-    # K2.6 supports thinking and non-thinking modes. We disable thinking
-    # to keep response shape identical to OpenAI — no reasoning_content
-    # to handle, no preservation requirements in multi-turn dispatch.
-    EXTRA_BODY = {"thinking": {"type": "disabled"}}
-else:
-    
-    client = OpenAI()  # Reads OPENAI_API_KEY from environment, default base URL.
-    EXTRA_BODY = {}
+# One client, reused for every call
+client = OpenAI()
 
 
 
