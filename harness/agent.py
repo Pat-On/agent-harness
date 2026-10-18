@@ -127,26 +127,25 @@ def _consolidate_memory(messages: list, client) -> None:
 
 
 def _run_compaction(compactor: Compactor, messages: list[dict]) -> None:
-       before = compactor.get_last_token_count()
-       new_messages = compactor.compact(messages)
+    before = compactor.get_last_token_count()
+    new_messages = compactor.compact(messages)
 
-       if new_messages is None:
-           # No-op: not enough conversation to compact.
-           print(
-               "[Compaction skipped: not enough older history to summarize "
-               f"(need more than {COMPACTION_KEEP_RECENT} user turns).]"
-           )
-           return
+    if new_messages is None:
+        # No-op: not enough conversation to compact.
+        print(
+            "[Compaction skipped: not enough older history to summarize "
+            f"(need more than {COMPACTION_KEEP_RECENT} user turns).]"
+        )
+        return
 
-       messages.clear()
-       messages.extend(new_messages)
+    messages.clear()
+    messages.extend(new_messages)
 
-       approximate_after = compactor.approximate_char_count(messages)
-       print(
-           f"[Context compacted at {before:,} tokens → ~{approximate_after:,} tokens. "
-           f"Full history: .harness/context_log.jsonl]"
-       )
-
+    approximate_after = compactor.approximate_char_count(messages)
+    print(
+        f"[Context compacted at {before:,} tokens → ~{approximate_after:,} tokens. "
+        f"Full history: .harness/context_log.jsonl]"
+    )
 
 
 def run():
