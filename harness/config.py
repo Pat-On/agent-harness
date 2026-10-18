@@ -21,6 +21,7 @@ from pathlib import Path
 WORKSPACE: Path = Path("./workspace").resolve()
 WORKSPACE.mkdir(exist_ok=True)
 
+
 # -- Model configuration --
 # The chat completion model the harness calls. Any OpenAI-compatible
 # model ID works (e.g., "gpt-4o-mini", "kimi-k2.6").
@@ -65,9 +66,11 @@ DENY_LIST: set[str] = {
 }
 
 # -- Sandbox configuration --                                             
-# The Docker image used for the containerized bash tool. 
-# SANDBOX_IMAGE: str = "python:3.11-slim"
-SANDBOX_IMAGE: str = "agent-harness:01"
+# The Docker image used for the containerized bash tool.          
+# Custom image built from harness/sandbox/Dockerfile — Debian base with
+# Python, Node 20, git, curl, jq, ripgrep, and other common CLIs.
+# Rebuild with: docker build -f harness/sandbox/Dockerfile -t agent-harness:0.1 . 
+SANDBOX_IMAGE: str = "agent-harness:0.1"
 
 # Where the workspace is mounted inside the container. All bash commands
 # see this path as their working directory. Bind-mounted from the host's
